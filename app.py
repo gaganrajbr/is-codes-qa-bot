@@ -1,33 +1,40 @@
-# app.py
 import streamlit as st
-from langchain_community.llms import HuggingFaceHub
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.chains import RetrievalQA
+from langchain.vectorstores import Chroma
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.document_loaders import PyPDFLoader
+from langchain.llms import HuggingFacePipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+import glob
 
-# UI
-st.title("📘 IS Codes Q&A Bot")
-uploaded_files = st.file_uploader("Upload IS Codes PDFs", type="pdf", accept_multiple_files=True)
+st.title("📘 IS Codes Q&A Bot (Free LLM)")
 
-if uploaded_files:
-    docs = []
-    for file in uploaded_files:
-        loader = PyPDFLoader(file)
-        docs.extend(loader.load())
-    
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = splitter.split_documents(docs)
+# Load all PDFs from codes folder
+code_files = glob.glob("codes/*.pdf")
+docs = []
+for file in code_files:
+    loader = PyPDFLoader(file)
+    docs.extend(loader.load())
 
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = FAISS.from_documents(chunks, embeddings)
+# Split text into chunks
+text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+split_docs = text_splitter.split_documents(docs)
 
-    query = st.text_input("Ask a question about IS Codes")
-    if query:
-        retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k":3})
-        docs = retriever.get_relevant_documents(query)
+# Create embeddings + vector store
+embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+vectorstore = Chroma.from_documents(split_docs, embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        llm = HuggingFaceHub(repo_id="meta-llama/Llama-2-7b-chat-hf", model_kwargs={"temperature":0.3, "max_length":512})
-        context = "\n\n".join([d.page_content for d in docs])
-        response = llm(f"Answer the following question based on IS Codes:\n\n{query}\n\nContext:\n{context}")
-        st.write(response)
+# Load free HuggingFace LLM
+tokenizer = AutoTokenizer.from_pretrained("TheBloke/Llama-2-7B-Chat-GGML")
+model = AutoModelForCausalLM.from_pretrained("TheBloke/Llama-2-7B-Chat-GGML")
+pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+llm = HuggingFacePipeline(pipeline=pipe)
+
+qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
+
+query = st.text_input("Ask a question about IS Codes:")
+if query:
+    response = qa.run(query)
+    st.write(response)
