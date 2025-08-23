@@ -1,63 +1,35 @@
-# app.py
+from fastapi import FastAPI, Query
+import sqlite3
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
-import streamlit as st
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
-from langchain_openai import OpenAI
+app = FastAPI()
+DB_FILE = "is_codes.db"
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---------------------------
-# Streamlit UI
-# ---------------------------
-st.set_page_config(page_title="IS Codes QA Bot", layout="wide")
-st.title("📘 IS Codes QA Bot (LangChain + Chroma)")
+def search_db(query, top_k=3):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-# ---------------------------
-# Setup embeddings + DB
-# ---------------------------
-# You need to set OPENAI_API_KEY in your environment
-embeddings = OpenAIEmbeddings()
+    query_emb = model.encode([query])[0]
+    cursor.execute("SELECT id, content, embedding FROM codes")
+    rows = cursor.fetchall()
 
-# Assume you already have a Chroma DB directory called "chroma_db"
-# If not, you’ll need to create it by loading and embedding your docs first
-db = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
+    similarities = []
+    for row in rows:
+        emb = np.frombuffer(row[2], dtype=np.float32)
+        score = np.dot(query_emb, emb) / (np.linalg.norm(query_emb) * np.linalg.norm(emb))
+        similarities.append((row[1], score))
 
-retriever = db.as_retriever(search_kwargs={"k": 3})
+    conn.close()
+    similarities.sort(key=lambda x: x[1], reverse=True)
+    return similarities[:top_k]
 
-# ---------------------------
-# Prompt + QA chain
-# ---------------------------
-prompt_template = """
-You are an assistant for question-answering tasks about IS Codes.
-Use the following context to answer the question.
-If you don’t know the answer, just say you don’t know. Do not make up answers.
+@app.get("/")
+def home():
+    return {"message": "IS Codes QA Bot is running 🚀"}
 
-Context:
-{context}
-
-Question: {question}
-
-Answer:
-"""
-PROMPT = PromptTemplate(
-    template=prompt_template, input_variables=["context", "question"]
-)
-
-qa_chain = RetrievalQA.from_chain_type(
-    llm=OpenAI(temperature=0),
-    retriever=retriever,
-    chain_type="stuff",
-    chain_type_kwargs={"prompt": PROMPT},
-)
-
-# ---------------------------
-# Streamlit Input
-# ---------------------------
-query = st.text_input("Ask a question about IS Codes:")
-
-if query:
-    with st.spinner("Searching IS Codes..."):
-        response = qa_chain.run(query)
-    st.markdown("### Answer")
-    st.write(response)
+@app.get("/ask")
+def ask(query: str = Query(..., description="Your question about IS codes")):
+    results = search_db(query)
+    return {"query": query, "answers": results}
