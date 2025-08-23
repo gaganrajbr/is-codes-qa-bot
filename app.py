@@ -1,40 +1,63 @@
+# app.py
+
 import streamlit as st
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.chains import RetrievalQA
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader
-from langchain.llms import HuggingFacePipeline
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-import glob
+from langchain.prompts import PromptTemplate
+from langchain_openai import OpenAI
 
-st.title("📘 IS Codes Q&A Bot (Free LLM)")
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="IS Codes QA Bot", layout="wide")
+st.title("📘 IS Codes QA Bot (LangChain + Chroma)")
 
-# Load all PDFs from codes folder
-code_files = glob.glob("codes/*.pdf")
-docs = []
-for file in code_files:
-    loader = PyPDFLoader(file)
-    docs.extend(loader.load())
+# ---------------------------
+# Setup embeddings + DB
+# ---------------------------
+# You need to set OPENAI_API_KEY in your environment
+embeddings = OpenAIEmbeddings()
 
-# Split text into chunks
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-split_docs = text_splitter.split_documents(docs)
+# Assume you already have a Chroma DB directory called "chroma_db"
+# If not, you’ll need to create it by loading and embedding your docs first
+db = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
 
-# Create embeddings + vector store
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vectorstore = Chroma.from_documents(split_docs, embeddings)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+retriever = db.as_retriever(search_kwargs={"k": 3})
 
-# Load free HuggingFace LLM
-tokenizer = AutoTokenizer.from_pretrained("TheBloke/Llama-2-7B-Chat-GGML")
-model = AutoModelForCausalLM.from_pretrained("TheBloke/Llama-2-7B-Chat-GGML")
-pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-llm = HuggingFacePipeline(pipeline=pipe)
+# ---------------------------
+# Prompt + QA chain
+# ---------------------------
+prompt_template = """
+You are an assistant for question-answering tasks about IS Codes.
+Use the following context to answer the question.
+If you don’t know the answer, just say you don’t know. Do not make up answers.
 
-qa = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
+Context:
+{context}
 
+Question: {question}
+
+Answer:
+"""
+PROMPT = PromptTemplate(
+    template=prompt_template, input_variables=["context", "question"]
+)
+
+qa_chain = RetrievalQA.from_chain_type(
+    llm=OpenAI(temperature=0),
+    retriever=retriever,
+    chain_type="stuff",
+    chain_type_kwargs={"prompt": PROMPT},
+)
+
+# ---------------------------
+# Streamlit Input
+# ---------------------------
 query = st.text_input("Ask a question about IS Codes:")
+
 if query:
-    response = qa.run(query)
+    with st.spinner("Searching IS Codes..."):
+        response = qa_chain.run(query)
+    st.markdown("### Answer")
     st.write(response)
