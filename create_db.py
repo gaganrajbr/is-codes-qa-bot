@@ -1,41 +1,48 @@
-# create_db.py
-
 import os
-from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import OpenAIEmbeddings
+import sqlite3
+import pandas as pd
+from sentence_transformers import SentenceTransformer
 
-# ---------------------------
-# SETTINGS
-# ---------------------------
-DATA_PATH = "data"        # folder where your IS Code PDFs are stored
-CHROMA_PATH = "chroma_db" # folder to store the vector database
+DB_FILE = "is_codes.db"
+CODES_FOLDER = "codes"
 
-# ---------------------------
-# Load documents
-# ---------------------------
-print("📂 Loading documents...")
-loader = DirectoryLoader(DATA_PATH, glob="*.pdf", loader_cls=PyPDFLoader)
-documents = loader.load()
+def create_database():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-print(f"✅ Loaded {len(documents)} documents")
+    # Create table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        filename TEXT,
+        content TEXT,
+        embedding BLOB
+    )
+    """)
 
-# ---------------------------
-# Split into chunks
-# ---------------------------
-print("✂️ Splitting text into chunks...")
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-docs = text_splitter.split_documents(documents)
-print(f"✅ Created {len(docs)} chunks")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---------------------------
-# Create embeddings + store in Chroma
-# ---------------------------
-print("⚙️ Creating embeddings and storing in Chroma DB...")
-embeddings = OpenAIEmbeddings()
+    for file in os.listdir(CODES_FOLDER):
+        if file.endswith(".txt") or file.endswith(".csv"):
+            path = os.path.join(CODES_FOLDER, file)
+            
+            if file.endswith(".csv"):
+                df = pd.read_csv(path)
+                texts = df.astype(str).agg(" ".join, axis=1).tolist()
+            else:
+                with open(path, "r", encoding="utf-8") as f:
+                    texts = f.readlines()
 
-db = Chroma.from_documents(docs, embeddings, persist_directory=CHROMA_PATH)
-db.persist()
+            for text in texts:
+                text = text.strip()
+                if text:
+                    embedding = model.encode([text])[0].tobytes()
+                    cursor.execute("INSERT INTO codes (filename, content, embedding) VALUES (?, ?, ?)",
+                                   (file, text, embedding))
 
-print(f"🎉 Database created at: {CHROMA_PATH}")
+    conn.commit()
+    conn.close()
+    print("✅ Database created successfully.")
+
+if __name__ == "__main__":
+    create_database()
