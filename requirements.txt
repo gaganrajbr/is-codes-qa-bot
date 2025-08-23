@@ -1,7 +1,5 @@
-streamlit
-langchain
-chromadb
-pypdf
+fastapi
+uvicorn
+sqlalchemy
+pandas
 sentence-transformers
-transformers
-torch
